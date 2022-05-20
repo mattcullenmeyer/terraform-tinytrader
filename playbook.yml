@@ -1,0 +1,72 @@
+- become: yes
+  hosts: all
+  name: droplet-install
+  tasks:
+    - name: Add the user 'matt' and add it to 'sudo'
+      user:
+        name: matt
+        group: sudo
+
+    # https://www.howtoforge.com/tutorial/setup-new-user-and-ssh-key-authentication-using-ansible/
+    - name: Add user 'matt' to the sudoers
+      copy:
+        dest: "/etc/sudoers.d/matt"
+        content: "matt ALL=(ALL) NOPASSWD:ALL"
+
+    - name: Add SSH key to 'matt'
+      authorized_key:
+        user: matt
+        state: present
+        key: "{{ lookup('file', public_key) }}"
+
+    - name: Upgrade package list
+      apt:
+        update_cache: yes
+        force_apt_get: yes
+
+    # A common issue, particularly during early boot or at specific clock times
+    # is that apt will be locked by another process, perhaps trying to auto-update
+    # or just a race condition on a thread. This work-around (which can also be
+    # applied to any of the above statements) ensures that if there is a lock file
+    # engaged, which is trapped by the `msg` value, triggers a repeat until the
+    # lock file is released.
+    # https://github.com/ansible/ansible/issues/51663
+    - name: Update all packages
+      apt:
+        upgrade: dist
+        force_apt_get: yes
+      register: upgrade_dist
+      retries: 100
+      until: upgrade_dist is success
+
+    # https://docs.ansible.com/ansible/2.7/modules/ufw_module.html
+    - name: Allow everything and enable UFW
+      ufw:
+        state: enabled
+        policy: allow
+
+    - name: Install required system packages
+      apt: name={{ item }} state=latest update_cache=yes
+      loop:
+        [
+          "apt-transport-https",
+          "ca-certificates",
+          "curl",
+          "software-properties-common",
+        ]
+
+    - name: Add Docker GPG apt Key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker Repository
+      apt_repository:
+        repo: deb https://download.docker.com/linux/ubuntu focal stable
+        state: present
+
+    - name: Update apt and install docker-ce
+      apt: update_cache=yes name=docker-ce state=latest
+
+    - name: Reboot machine
+      reboot:
